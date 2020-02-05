@@ -1,0 +1,31 @@
+<launch>
+	 <machine 
+		name="ubuntu" 
+		address="192.168.1.164" 
+		user="ubuntu"
+		password="azertyuiop"
+		env-loader="/home/ubuntu/catkin_ws/devel/remote_env_loader.sh"
+	 />
+	 
+	 <machine 
+		name="pclinux.local" 
+		address="192.168.1.150" 
+		user="sicatombe" 
+	 />
+	
+ <node machine="ubuntu" pkg="urg_node" type="urg_node" name="laser_node" output="screen">
+    <param name="urg_node/calibrate_time" value="false" />
+    <param name="urg_node/port" value="/dev/ttyACM0" />
+ </node>
+
+ <node machine="ubuntu" pkg="juliette_odom" type="juliette_odom_node" name="juliette_odom_node" output="screen"></node>
+ 
+ <node machine="ubuntu" pkg="juliette_tf" type="juliette_tf_broadcaster" name="juliette_tf_broadcaster" output="screen"></node>
+ 
+ <node machine="pclinux.local" pkg="juliette_controller" type="diffdrive_controller.py" name="diffdrive_controller" output="screen"></node>
+ 
+ <node machine="ubuntu" pkg="juliette_controller" type="juliette_controller.py" name="juliette_controller" output="screen">
+	<param name="juliette_on" value="True" />
+ </node>
+
+</launch> 

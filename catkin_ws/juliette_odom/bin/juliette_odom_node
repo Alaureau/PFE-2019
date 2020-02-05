@@ -1,0 +1,142 @@
+#!/usr/bin/env python
+
+import rospy
+import tf
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Point, Pose, Quaternion, Twist, Vector3
+from std_msgs.msg import Float32
+import RPi.GPIO as GPIO
+from math import sin, cos, pi
+
+# Define left encoder callback
+def do_left_encoder(channel):
+   global left_encoder_count
+   if GPIO.input(left_encoder_pin_B) == 1:
+      left_encoder_count += 1
+   else:
+      left_encoder_count -= 1
+
+# Define right encoder callback
+def do_right_encoder(channel):
+   global right_encoder_count
+   if GPIO.input(right_encoder_pin_B) == 1:
+      right_encoder_count -= 1
+   else:
+      right_encoder_count += 1
+
+# Define reset functions
+def reset_left_encoder():
+   global left_encoder_count
+   left_encoder_count = 0
+   
+def reset_right_encoder():
+   global right_encoder_count
+   right_encoder_count = 0
+   
+def from_count_to_radian(count):
+   global encoders_res;
+   return count * 2 * pi / encoders_res
+   
+# Node initialization
+rospy.init_node('juliette_odom_node')
+
+# Publisher and tf initialization
+odom_pub = rospy.Publisher("odom", Odometry, queue_size=50)
+odom_broadcaster = tf.TransformBroadcaster()
+lwheel_angular_vel_enc_pub = rospy.Publisher('lwheel_angular_vel_enc', Float32, queue_size=10)
+rwheel_angular_vel_enc_pub = rospy.Publisher('rwheel_angular_vel_enc', Float32, queue_size=10)
+
+# Set constants and variables for the encoders
+left_encoder_pin_A = 18
+left_encoder_pin_B = 23
+right_encoder_pin_A = 17
+right_encoder_pin_B = 27
+left_encoder_count = 0
+right_encoder_count = 0
+encoders_res = 1024
+
+# Set the pins with ext pullup wiring
+GPIO.setwarnings(False)
+GPIO.setmode (GPIO.BCM)
+GPIO.setup (left_encoder_pin_A, GPIO.IN, )
+GPIO.setup (left_encoder_pin_B, GPIO.IN, )
+GPIO.setup (right_encoder_pin_A, GPIO.IN, )
+GPIO.setup (right_encoder_pin_B, GPIO.IN, )
+
+# Set interrupts for the encoders
+GPIO.add_event_detect (left_encoder_pin_A, GPIO.FALLING, callback=do_left_encoder) 
+GPIO.add_event_detect (right_encoder_pin_A, GPIO.FALLING, callback=do_right_encoder) 
+
+# Set constants for odometry calculation
+radius = 0.063 # Wheel radius
+length = 0.244 # Distance between the two wheels
+x = 0.0
+y = 0.0
+th = 0.0
+
+current_time = rospy.Time.now()
+last_time = rospy.Time.now()
+
+r = rospy.Rate(10)
+while not rospy.is_shutdown():
+	current_time = rospy.Time.now()
+	dt = (current_time - last_time).to_sec()
+	
+	# Compute angle difference for each wheel
+	d_lw_angle = from_count_to_radian(left_encoder_count)
+	d_rw_angle = from_count_to_radian(right_encoder_count)
+	
+	# Reset encoders
+	reset_left_encoder()
+	reset_right_encoder()
+	
+	# Compute distance difference for the robot
+	d_robot_x = (radius / 2) * (d_lw_angle + d_rw_angle)
+	
+	# Compute angle difference for the robot
+	d_robot_th = (radius / (2*length)) * (d_rw_angle - d_lw_angle)
+	
+	# Actualize x, y and th, pose of the robot relative to its initial position
+	x += d_robot_x * cos(th)
+	y += d_robot_x * sin(th)
+	th += d_robot_th
+	
+	# Optional: compute x and th velocities 
+	vx = d_robot_x / dt
+	vth = d_robot_th / dt
+
+	# Create quaternion for th
+	odom_quat = tf.transformations.quaternion_from_euler(0, 0, th)
+
+	# Publish transform other tf
+	odom_broadcaster.sendTransform(
+		(x, y, 0.),
+		odom_quat,
+		current_time,
+		"base_link",
+		"odom"
+	)
+
+	# Publish the odometry message over ROS
+	odom = Odometry()
+	odom.header.stamp = current_time
+	odom.header.frame_id = "odom"
+
+	# Set the position
+	odom.pose.pose = Pose(Point(x, y, 0.), Quaternion(*odom_quat))
+
+	# Set the velocity
+	odom.child_frame_id = "base_link"
+	odom.twist.twist = Twist(Vector3(vx, 0, 0), Vector3(0, 0, vth))
+
+	# Publish the message
+	odom_pub.publish(odom)
+	
+	# Publish encoder velocity for PID control
+	lwheel_angular_vel_enc_pub.publish(d_lw_angle / dt)
+	rwheel_angular_vel_enc_pub.publish(d_rw_angle / dt)
+	
+	last_time = current_time
+	r.sleep()
+# Unset pins before exit
+GPIO.cleanup()
